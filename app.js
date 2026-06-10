@@ -1,343 +1,846 @@
-// --- STATE MANAGEMENT ---
+/**
+ * @file app.js
+ * @description EcoSphere – Carbon Footprint Awareness Platform
+ * Core application logic: state management, calculator, gamification,
+ * daily tracking, Chart.js integration, and Gemini AI Advisor.
+ *
+ * Architecture:
+ *   STATE  → single source of truth
+ *   CALC   → pure footprint computation functions
+ *   UI     → DOM renderers that read from STATE
+ *   EVENTS → user interaction handlers that mutate STATE then call UI
+ */
+
+'use strict';
+
+// =============================================================
+// 1. CONSTANTS & EMISSION FACTORS
+// =============================================================
+
+/**
+ * Emission conversion factors derived from IPCC AR6 / EPA estimates.
+ * All results are in metric Tons of CO2-equivalent per year.
+ * @readonly
+ * @type {Object}
+ */
+const EMISSION_FACTORS = Object.freeze({
+  /** Tons CO2 per kWh of electricity (global average grid) */
+  ENERGY_PER_KWH: 0.000385,
+  /** Tons CO2 per mile driven (average petrol car) */
+  TRANSPORT_PER_MILE: 0.000404,
+  /** Annual diet emissions by category (Tons CO2) */
+  DIET: { high: 3.3, avg: 2.5, veg: 1.7, vegan: 1.5 },
+  /** Tons CO2 per waste bag per year */
+  WASTE_PER_BAG: 0.019,
+  /** Average global footprint for comparison */
+  GLOBAL_AVERAGE: 4.7,
+  /** Baseline for computing reduction % (worst case: full meat, max energy) */
+  BASELINE: 16.0
+});
+
+/** Maximum achievable Eco-Score */
+const MAX_ECO_SCORE = 100;
+
+/** Sanitisation regex – strips HTML tags from user input */
+const SANITISE_RE = /<[^>]*>/g;
+
+// =============================================================
+// 2. APPLICATION STATE
+// =============================================================
+
+/**
+ * Centralized mutable application state.
+ * All functions READ from and WRITE to this object.
+ */
 const state = {
-    footprint: {
-        energy: 0,
-        transport: 0,
-        diet: 0,
-        waste: 0,
-        total: 0
+  footprint: {
+    energy:    0,
+    transport: 0,
+    diet:      0,
+    waste:     0,
+    total:     0
+  },
+  ecoScore:         40,
+  co2Saved:         0,
+  reductionPct:     0,
+  activeDiet:       'avg',
+  completedActions: new Set(),
+  logs:             JSON.parse(localStorage.getItem('ecoLogs') || '[]'),
+  apiKey:           localStorage.getItem('geminiApiKey') || ''
+};
+
+// =============================================================
+// 3. PURE CALCULATION FUNCTIONS (fully testable, no DOM)
+// =============================================================
+
+/**
+ * Calculate annual carbon footprint from raw user inputs.
+ * @param {number} energyKwh     – Monthly kWh usage.
+ * @param {number} transportMile – Weekly miles driven.
+ * @param {string} dietType      – One of: high | avg | veg | vegan.
+ * @param {number} wasteBags     – Waste bags per week.
+ * @returns {{ energy:number, transport:number, diet:number, waste:number, total:number }}
+ */
+function calcFootprint(energyKwh, transportMile, dietType, wasteBags) {
+  const energy    = parseFloat((energyKwh    * 12   * EMISSION_FACTORS.ENERGY_PER_KWH).toFixed(3));
+  const transport = parseFloat((transportMile * 52  * EMISSION_FACTORS.TRANSPORT_PER_MILE).toFixed(3));
+  const diet      = EMISSION_FACTORS.DIET[dietType] ?? EMISSION_FACTORS.DIET.avg;
+  const waste     = parseFloat((wasteBags    * 52   * EMISSION_FACTORS.WASTE_PER_BAG).toFixed(3));
+  const total     = parseFloat((energy + transport + diet + waste).toFixed(2));
+  return { energy, transport, diet, waste, total };
+}
+
+/**
+ * Compute an Eco-Score (0–100) from total footprint and completed actions.
+ * Lower footprint + more actions = higher score.
+ * @param {number} totalTons       – Total annual CO2 in Tons.
+ * @param {number} actionsCount    – Number of completed reduction actions.
+ * @returns {number} integer Eco-Score between 0 and 100.
+ */
+function calcEcoScore(totalTons, actionsCount) {
+  const raw = MAX_ECO_SCORE - ((totalTons - 1.5) * 4.5) + actionsCount * 3;
+  return Math.max(0, Math.min(MAX_ECO_SCORE, Math.round(raw)));
+}
+
+/**
+ * Compute the reduction percentage against the baseline.
+ * @param {number} totalTons – Current total footprint.
+ * @returns {number} reduction percentage (0–100).
+ */
+function calcReductionPct(totalTons) {
+  const pct = ((EMISSION_FACTORS.BASELINE - totalTons) / EMISSION_FACTORS.BASELINE) * 100;
+  return Math.max(0, Math.min(100, parseFloat(pct.toFixed(1))));
+}
+
+/**
+ * Determine which badges should be unlocked based on current state.
+ * @param {number}  actionsCount  – Completed action count.
+ * @param {string}  dietType      – Current diet selection.
+ * @param {number}  totalTons     – Total footprint.
+ * @returns {Set<string>} Set of badge IDs that should be unlocked.
+ */
+function calcUnlockedBadges(actionsCount, dietType, totalTons) {
+  const unlocked = new Set();
+  if (actionsCount >= 1)                         unlocked.add('eco-starter');
+  if (actionsCount >= 3)                         unlocked.add('action-hero');
+  if (dietType === 'veg' || dietType === 'vegan') unlocked.add('green-eater');
+  if (dietType === 'vegan')                      unlocked.add('vegan-champion');
+  if (totalTons < 8)                             unlocked.add('low-footprint');
+  if (totalTons < 4)                             unlocked.add('climate-hero');
+  return unlocked;
+}
+
+/**
+ * Sanitise a string to prevent XSS by stripping HTML tags.
+ * @param {string} input – Raw user input string.
+ * @returns {string} Sanitised string.
+ */
+function sanitiseInput(input) {
+  if (typeof input !== 'string') return '';
+  return input.replace(SANITISE_RE, '').trim().slice(0, 500);
+}
+
+/**
+ * Validate a log form entry. Returns error message or null.
+ * @param {string} date  – ISO date string.
+ * @param {string} type  – Activity type key.
+ * @param {string} value – Raw quantity string.
+ * @returns {string|null} Error message or null if valid.
+ */
+function validateLogEntry(date, type, value) {
+  if (!date)           return 'Please select a date.';
+  if (!type)           return 'Please select an activity type.';
+  const needsValue = !['meatless', 'recycled'].includes(type);
+  if (needsValue && (!value || parseFloat(value) < 0)) return 'Please enter a valid quantity.';
+  return null;
+}
+
+/**
+ * Compute the CO2 equivalent for a logged activity in kg.
+ * @param {string} type  – Activity key.
+ * @param {number} value – Quantity.
+ * @returns {number} kg CO2 equivalent.
+ */
+function calcLogCo2(type, value) {
+  const MAP = {
+    driving: value * 0.404,    // kg CO2 per mile (car)
+    energy:  value * 0.385,    // kg CO2 per kWh
+    flight:  value * 90,       // kg CO2 per flight hour (economy)
+    meatless: -3,              // kg saved
+    recycled: -1.5             // kg saved
+  };
+  return parseFloat((MAP[type] ?? 0).toFixed(2));
+}
+
+// =============================================================
+// 4. DATA
+// =============================================================
+
+const BADGE_DATA = [
+  { id: 'eco-starter',    icon: 'fa-seedling',         name: 'Eco Starter',     req: 'Complete 1 action' },
+  { id: 'action-hero',    icon: 'fa-bolt',             name: 'Action Hero',     req: 'Complete 3 actions' },
+  { id: 'green-eater',    icon: 'fa-carrot',           name: 'Green Eater',     req: 'Go vegetarian/vegan' },
+  { id: 'vegan-champion', icon: 'fa-leaf',             name: 'Vegan Champion',  req: 'Choose vegan diet' },
+  { id: 'low-footprint',  icon: 'fa-arrow-trend-down', name: 'Low Footprint',   req: 'Under 8 Tons/yr' },
+  { id: 'climate-hero',   icon: 'fa-earth-americas',   name: 'Climate Hero',    req: 'Under 4 Tons/yr' }
+];
+
+const ACTION_DATA = [
+  { id: 'a1', title: 'Meatless Monday',        desc: 'Skip meat one day/week. Saves ~3 kg CO₂.', savings: 3,  difficulty: 'easy',   icon: 'fa-carrot' },
+  { id: 'a2', title: 'LED Bulb Switch',         desc: 'Replace 5 incandescent bulbs with LEDs.',  savings: 5,  difficulty: 'easy',   icon: 'fa-lightbulb' },
+  { id: 'a3', title: 'Public Transit Day',      desc: 'Bus/train instead of driving 1× week.',    savings: 8,  difficulty: 'easy',   icon: 'fa-bus' },
+  { id: 'a4', title: 'Cold Water Laundry',      desc: 'Wash clothes in cold water always.',        savings: 4,  difficulty: 'easy',   icon: 'fa-shirt' },
+  { id: 'a5', title: 'Shorter Showers',         desc: 'Reduce shower time by 2 minutes daily.',   savings: 2,  difficulty: 'easy',   icon: 'fa-shower' },
+  { id: 'a6', title: 'Bike Commute 2×/week',    desc: 'Cycle to work or shops twice a week.',     savings: 15, difficulty: 'medium', icon: 'fa-bicycle' },
+  { id: 'a7', title: 'Home Composting',         desc: 'Compost food waste instead of binning.',   savings: 10, difficulty: 'medium', icon: 'fa-recycle' },
+  { id: 'a8', title: 'Plant-Based for a Month', desc: 'Go fully plant-based for 30 days.',        savings: 30, difficulty: 'hard',   icon: 'fa-leaf' },
+  { id: 'a9', title: 'Solar Energy Switch',     desc: 'Move to a renewable energy tariff.',       savings: 50, difficulty: 'hard',   icon: 'fa-solar-panel' }
+];
+
+// =============================================================
+// 5. CHART INSTANCES
+// =============================================================
+let breakdownChart = null;
+let trendChart     = null;
+
+/**
+ * Initialise Chart.js doughnut chart for footprint breakdown.
+ */
+function initBreakdownChart() {
+  const ctx = document.getElementById('breakdownChart');
+  if (!ctx) return;
+  breakdownChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Energy', 'Transport', 'Diet', 'Waste'],
+      datasets: [{
+        data: [0, 0, 0, 0],
+        backgroundColor: ['#fbbf24', '#fb7185', '#34d399', '#94a3b8'],
+        borderWidth: 2,
+        borderColor: 'rgba(15,23,42,0.8)',
+        hoverOffset: 12
+      }]
     },
-    ecoScore: 40,
-    co2Saved: 0,
-    actionsCompleted: 0,
-    apiKey: localStorage.getItem('geminiApiKey') || ''
-};
-
-// --- EMISSION FACTORS (Assumptions for calculation) ---
-const FACTORS = {
-    energy_kwh: 0.0004, // Tons per kWh
-    transport_mile: 0.0004, // Tons per mile
-    diet: { high: 3.3, avg: 2.5, veg: 1.7, vegan: 1.5 }, // Tons per year
-    waste_bag: 0.02 // Tons per bag
-};
-
-// --- DOM ELEMENTS ---
-const elements = {
-    navLinks: document.querySelectorAll('.nav-links li'),
-    views: document.querySelectorAll('.view'),
-    
-    // Sliders & Inputs
-    slEnergy: document.getElementById('slider-energy'),
-    slTransport: document.getElementById('slider-transport'),
-    slWaste: document.getElementById('slider-waste'),
-    valEnergy: document.getElementById('val-energy'),
-    valTransport: document.getElementById('val-transport'),
-    valWaste: document.getElementById('val-waste'),
-    dietBtns: document.querySelectorAll('#diet-group .btn-select'),
-    
-    // Dashboard KPIs
-    dTotal: document.getElementById('dash-total-co2'),
-    dSaved: document.getElementById('dash-saved-co2'),
-    dActions: document.getElementById('dash-active-actions'),
-    navScore: document.getElementById('nav-eco-score'),
-    
-    // Actions & Badges
-    actionList: document.getElementById('actionList'),
-    badgesGrid: document.getElementById('badgesGrid'),
-    
-    // Modal
-    settingsBtn: document.getElementById('openSettingsBtn'),
-    settingsModal: document.getElementById('settingsModal'),
-    closeBtn: document.querySelector('.close-btn'),
-    apiKeyInput: document.getElementById('geminiApiKey'),
-    saveBtn: document.getElementById('saveSettingsBtn'),
-    
-    // Chat
-    chatInput: document.getElementById('chatInput'),
-    sendBtn: document.getElementById('sendBtn'),
-    chatWindow: document.getElementById('chatWindow'),
-    aiStatus: document.getElementById('ai-status'),
-    quickPrompts: document.querySelectorAll('.prompt-btn')
-};
-
-// --- CHART INITIALIZATION ---
-let breakdownChart;
-function initChart() {
-    const ctx = document.getElementById('breakdownChart').getContext('2d');
-    breakdownChart = new Chart(ctx, {
-        type: 'doughnut',
-        data: {
-            labels: ['Energy', 'Transport', 'Diet', 'Waste'],
-            datasets: [{
-                data: [0, 0, 0, 0],
-                backgroundColor: ['#f59e0b', '#f43f5e', '#10b981', '#94a3b8'],
-                borderWidth: 0,
-                hoverOffset: 10
-            }]
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '65%',
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { color: '#f1f5f9', padding: 14, font: { family: 'Outfit', size: 12 } }
         },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { position: 'bottom', labels: { color: '#f8fafc' } }
-            }
-        }
-    });
-}
-
-function updateChart() {
-    if (!breakdownChart) return;
-    breakdownChart.data.datasets[0].data = [
-        state.footprint.energy,
-        state.footprint.transport,
-        state.footprint.diet,
-        state.footprint.waste
-    ];
-    breakdownChart.update();
-}
-
-// --- CALCULATOR LOGIC ---
-let activeDiet = 'avg';
-
-function calculateFootprint() {
-    const energy = parseInt(elements.slEnergy.value);
-    const transport = parseInt(elements.slTransport.value);
-    const waste = parseInt(elements.slWaste.value);
-    
-    // Annualize values
-    state.footprint.energy = parseFloat((energy * 12 * FACTORS.energy_kwh).toFixed(2));
-    state.footprint.transport = parseFloat((transport * 52 * FACTORS.transport_mile).toFixed(2));
-    state.footprint.waste = parseFloat((waste * 52 * FACTORS.waste_bag).toFixed(2));
-    state.footprint.diet = FACTORS.diet[activeDiet];
-    
-    state.footprint.total = parseFloat((state.footprint.energy + state.footprint.transport + state.footprint.diet + state.footprint.waste).toFixed(2));
-    
-    // Dynamically calculate Eco-Score (Assume 16 Tons is avg, 5 tons is ideal (score 100))
-    let score = 100 - ((state.footprint.total - 5) * 5);
-    state.ecoScore = Math.max(10, Math.min(100, Math.round(score))) + state.actionsCompleted * 2;
-    
-    updateDashboard();
-    updateChart();
-}
-
-function updateDashboard() {
-    elements.dTotal.innerHTML = `${state.footprint.total} <span class="unit">Tons CO₂/yr</span>`;
-    elements.dSaved.innerHTML = `${state.co2Saved} <span class="unit">kg this month</span>`;
-    elements.dActions.innerHTML = `${state.actionsCompleted} <span class="unit">Tasks</span>`;
-    elements.navScore.innerText = `${state.ecoScore}/100`;
-}
-
-// Event Listeners for Calculator
-elements.slEnergy.addEventListener('input', (e) => { elements.valEnergy.innerText = e.target.value; calculateFootprint(); });
-elements.slTransport.addEventListener('input', (e) => { elements.valTransport.innerText = e.target.value; calculateFootprint(); });
-elements.slWaste.addEventListener('input', (e) => { elements.valWaste.innerText = e.target.value; calculateFootprint(); });
-
-elements.dietBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-        elements.dietBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        activeDiet = btn.dataset.value;
-        calculateFootprint();
-    });
-});
-
-
-// --- ACTIONS & BADGES LOGIC ---
-const actionData = [
-    { id: 1, title: 'Meatless Monday', desc: 'Skip meat for one day to save ~3kg of CO2.', savings: 3, icon: 'fa-carrot' },
-    { id: 2, title: 'LED Transition', desc: 'Replace 5 incandescent bulbs with LEDs.', savings: 5, icon: 'fa-lightbulb' },
-    { id: 3, title: 'Public Transit Day', desc: 'Take a bus or train instead of driving.', savings: 8, icon: 'fa-bus' }
-];
-
-const badgesData = [
-    { id: 'b1', name: 'Eco Starter', icon: 'fa-seedling', req: 1 },
-    { id: 'b2', name: 'Commuter Hero', icon: 'fa-bicycle', req: 3 },
-    { id: 'b3', name: 'Energy Saver', icon: 'fa-plug-circle-check', req: 5 }
-];
-
-function renderActions() {
-    elements.actionList.innerHTML = '';
-    actionData.forEach(action => {
-        const div = document.createElement('div');
-        div.className = 'action-item';
-        div.innerHTML = `
-            <div class="action-info">
-                <h4><i class="fa-solid ${action.icon}"></i> ${action.title}</h4>
-                <p>${action.desc}</p>
-            </div>
-            <button class="btn-action" onclick="toggleAction(this, ${action.savings})">Complete</button>
-        `;
-        elements.actionList.appendChild(div);
-    });
-}
-
-window.toggleAction = function(btn, savings) {
-    const item = btn.closest('.action-item');
-    if (item.classList.contains('completed')) {
-        item.classList.remove('completed');
-        btn.innerText = 'Complete';
-        state.actionsCompleted--;
-        state.co2Saved -= savings;
-    } else {
-        item.classList.add('completed');
-        btn.innerText = 'Completed';
-        state.actionsCompleted++;
-        state.co2Saved += savings;
+        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.toFixed(2)} Tons CO₂` } }
+      }
     }
-    calculateFootprint();
-    checkBadges();
+  });
 }
 
+/**
+ * Initialise Chart.js line chart for daily emission trend.
+ */
+function initTrendChart() {
+  const ctx = document.getElementById('trendChart');
+  if (!ctx) return;
+  trendChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ label: 'kg CO₂', data: [], borderColor: '#22d3ee', backgroundColor: 'rgba(34,211,238,0.08)', tension: 0.4, fill: true, pointBackgroundColor: '#22d3ee', pointRadius: 5 }] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, title: { display: true, text: 'kg CO₂', color: '#94a3b8' } }
+      },
+      plugins: { legend: { labels: { color: '#f1f5f9', font: { family: 'Outfit' } } } }
+    }
+  });
+  refreshTrendChart();
+}
+
+/**
+ * Rebuild trend chart data from stored logs.
+ */
+function refreshTrendChart() {
+  if (!trendChart) return;
+  const sorted = [...state.logs].sort((a, b) => new Date(a.date) - new Date(b.date)).slice(-14);
+  trendChart.data.labels                 = sorted.map(l => l.date);
+  trendChart.data.datasets[0].data      = sorted.map(l => l.co2);
+  trendChart.update();
+}
+
+/**
+ * Update the breakdown doughnut chart from current state.
+ */
+function refreshBreakdownChart() {
+  if (!breakdownChart) return;
+  const { energy, transport, diet, waste } = state.footprint;
+  breakdownChart.data.datasets[0].data = [energy, transport, diet, waste];
+  breakdownChart.update();
+}
+
+// =============================================================
+// 6. UI RENDERERS
+// =============================================================
+
+/**
+ * Announce a message to screen-reader users via an ARIA live region.
+ * @param {string} message
+ */
+function srAnnounce(message) {
+  const el = document.getElementById('srAnnouncer');
+  if (!el) return;
+  el.textContent = '';
+  requestAnimationFrame(() => { el.textContent = message; });
+}
+
+/**
+ * Update all KPI cards and sidebar score from current state.
+ */
+function renderDashboard() {
+  const { total }    = state.footprint;
+  const score        = state.ecoScore;
+  const saved        = state.co2Saved;
+  const reductionPct = state.reductionPct;
+
+  // KPI Cards
+  safeSetText('dash-total-co2', `${total} Tons CO₂/yr`);
+  safeSetText('dash-saved-co2', `${saved} kg this month`);
+  safeSetText('dash-reduction', `${reductionPct}% vs baseline`);
+
+  // Sidebar score
+  safeSetText('nav-eco-score', `${score}/100`);
+  const bar = document.getElementById('scoreBar');
+  if (bar) {
+    bar.style.width = `${score}%`;
+    bar.setAttribute('aria-valuenow', score);
+  }
+
+  // Topbar summary
+  safeSetText('topbar-summary', `Your footprint: ${total} Tons CO₂/yr · Eco-Score: ${score}/100`);
+
+  // Calculator result panel
+  safeSetText('result-total', `${total} Tons CO₂/yr`);
+  const cmpEl = document.getElementById('result-comparison');
+  if (cmpEl) {
+    if (total < EMISSION_FACTORS.GLOBAL_AVERAGE) {
+      cmpEl.textContent = `✅ Below the global average (${EMISSION_FACTORS.GLOBAL_AVERAGE} Tons). Great work!`;
+      cmpEl.style.color = 'var(--accent-emerald)';
+    } else {
+      cmpEl.textContent = `⚠️ Above the global average (${EMISSION_FACTORS.GLOBAL_AVERAGE} Tons). Use the Reduce tab!`;
+      cmpEl.style.color = 'var(--accent-warning)';
+    }
+  }
+
+  // Reduction progress bar
+  safeSetText('reductionPct', `${reductionPct}%`);
+  const fill = document.getElementById('reductionBarFill');
+  const wrap = document.getElementById('reductionBarWrap');
+  if (fill) fill.style.width = `${Math.min(reductionPct * 2, 100)}%`; // bar spans 0–50% target
+  if (wrap) {
+    wrap.setAttribute('aria-valuenow', reductionPct);
+    wrap.setAttribute('aria-valuemax', 50);
+  }
+}
+
+/**
+ * Render the achievement badges grid.
+ */
 function renderBadges() {
-    elements.badgesGrid.innerHTML = '';
-    badgesData.forEach(badge => {
-        const div = document.createElement('div');
-        div.className = `badge ${state.actionsCompleted >= badge.req ? 'unlocked' : ''}`;
-        div.id = badge.id;
-        div.innerHTML = `<i class="fa-solid ${badge.icon}"></i><span>${badge.name}</span>`;
-        elements.badgesGrid.appendChild(div);
-    });
-}
-
-function checkBadges() {
-    badgesData.forEach(badge => {
-        const el = document.getElementById(badge.id);
-        if (state.actionsCompleted >= badge.req && !el.classList.contains('unlocked')) {
-            el.classList.add('unlocked');
-        } else if (state.actionsCompleted < badge.req && el.classList.contains('unlocked')) {
-            el.classList.remove('unlocked');
-        }
-    });
-}
-
-// --- NAVIGATION LOGIC ---
-elements.navLinks.forEach(link => {
-    link.addEventListener('click', () => {
-        elements.navLinks.forEach(l => l.classList.remove('active'));
-        elements.views.forEach(v => v.classList.remove('active-view'));
-        
-        link.classList.add('active');
-        document.getElementById(link.dataset.target).classList.add('active-view');
-    });
-});
-
-// --- SETTINGS MODAL ---
-elements.settingsBtn.addEventListener('click', () => {
-    elements.apiKeyInput.value = state.apiKey;
-    elements.settingsModal.classList.add('active');
-});
-elements.closeBtn.addEventListener('click', () => elements.settingsModal.classList.remove('active'));
-elements.saveBtn.addEventListener('click', () => {
-    const key = elements.apiKeyInput.value.trim();
-    localStorage.setItem('geminiApiKey', key);
-    state.apiKey = key;
-    elements.settingsModal.classList.remove('active');
-    updateAiStatus();
-});
-
-function updateAiStatus() {
-    if (state.apiKey) {
-        elements.aiStatus.innerText = 'Live Gemini API';
-        elements.aiStatus.classList.add('live');
-    } else {
-        elements.aiStatus.innerText = 'Simulation Mode';
-        elements.aiStatus.classList.remove('live');
-    }
-}
-
-// --- AI ADVISOR LOGIC ---
-function addMessage(text, sender) {
+  const grid = document.getElementById('badgesGrid');
+  if (!grid) return;
+  const unlockedIds = calcUnlockedBadges(state.completedActions.size, state.activeDiet, state.footprint.total);
+  grid.innerHTML = '';
+  BADGE_DATA.forEach(badge => {
+    const unlocked = unlockedIds.has(badge.id);
     const div = document.createElement('div');
-    div.className = `message ${sender}`;
-    div.innerHTML = `<p>${text}</p>`;
-    elements.chatWindow.appendChild(div);
-    elements.chatWindow.scrollTop = elements.chatWindow.scrollHeight;
+    div.className  = `badge${unlocked ? ' unlocked' : ''}`;
+    div.setAttribute('role', 'listitem');
+    div.setAttribute('aria-label', `${badge.name} – ${unlocked ? 'Unlocked' : 'Locked: ' + badge.req}`);
+    div.innerHTML  = `<i class="fa-solid ${badge.icon}" aria-hidden="true"></i>
+                      <span class="badge-name">${badge.name}</span>
+                      <span class="badge-req">${badge.req}</span>`;
+    grid.appendChild(div);
+    if (unlocked) srAnnounce(`Achievement unlocked: ${badge.name}`);
+  });
+}
+
+/**
+ * Render the action plan list.
+ */
+function renderActions() {
+  const list = document.getElementById('actionList');
+  if (!list) return;
+  list.innerHTML = '';
+  ACTION_DATA.forEach(action => {
+    const completed = state.completedActions.has(action.id);
+    const item = document.createElement('div');
+    item.className = `action-item${completed ? ' completed' : ''}`;
+    item.setAttribute('role', 'listitem');
+    item.innerHTML = `
+      <div class="action-info">
+        <h4><i class="fa-solid ${action.icon}" aria-hidden="true"></i> ${action.title}</h4>
+        <p>${action.desc}</p>
+        <p class="action-savings">💚 Saves ~${action.savings} kg CO₂/month</p>
+      </div>
+      <span class="action-difficulty difficulty-${action.difficulty}" aria-label="Difficulty: ${action.difficulty}">${action.difficulty}</span>
+      <button class="btn-action"
+        aria-pressed="${completed}"
+        aria-label="${completed ? 'Mark as incomplete: ' : 'Complete action: '}${action.title}"
+        onclick="toggleAction('${action.id}', ${action.savings}, this)">
+        ${completed ? '✓ Done' : 'Complete'}
+      </button>`;
+    list.appendChild(item);
+  });
+}
+
+/**
+ * Render the log history list.
+ */
+function renderLogHistory() {
+  const container = document.getElementById('logHistory');
+  if (!container) return;
+  if (state.logs.length === 0) {
+    container.innerHTML = '<p class="text-muted" style="padding:1rem">No logs yet. Add activities above.</p>';
+    return;
+  }
+  container.innerHTML = '';
+  [...state.logs].reverse().forEach(log => {
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    div.setAttribute('role', 'listitem');
+    const sign = log.co2 < 0 ? '' : '+';
+    div.innerHTML = `
+      <span>${log.typeLabel}</span>
+      <span>${log.value ?? ''}</span>
+      <span class="${log.co2 < 0 ? 'text-emerald' : 'text-coral'}">${sign}${log.co2} kg CO₂</span>
+      <span class="log-date">${log.date}</span>`;
+    container.appendChild(div);
+  });
+}
+
+/**
+ * Safely set the text content of an element by ID.
+ * @param {string} id
+ * @param {string} text
+ */
+function safeSetText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+/**
+ * Update calculator preview labels after slider/diet change.
+ */
+function updateCalcPreviews() {
+  const { energy, transport, diet, waste } = state.footprint;
+  safeSetText('preview-energy',    `≈ ${energy.toFixed(2)} Tons CO₂/yr from energy`);
+  safeSetText('preview-transport', `≈ ${transport.toFixed(2)} Tons CO₂/yr from transport`);
+  safeSetText('preview-diet',      `≈ ${diet.toFixed(2)} Tons CO₂/yr from diet`);
+  safeSetText('preview-waste',     `≈ ${waste.toFixed(2)} Tons CO₂/yr from waste`);
+}
+
+// =============================================================
+// 7. CORE STATE UPDATE (triggers all re-renders)
+// =============================================================
+
+/**
+ * Recalculate state from current form inputs and re-render the UI.
+ */
+function updateState() {
+  const energyVal    = parseInt(document.getElementById('slider-energy')?.value    || 300);
+  const transportVal = parseInt(document.getElementById('slider-transport')?.value || 150);
+  const wasteVal     = parseInt(document.getElementById('slider-waste')?.value     || 3);
+
+  state.footprint   = calcFootprint(energyVal, transportVal, state.activeDiet, wasteVal);
+  state.ecoScore    = calcEcoScore(state.footprint.total, state.completedActions.size);
+  state.reductionPct= calcReductionPct(state.footprint.total);
+
+  updateCalcPreviews();
+  renderDashboard();
+  renderBadges();
+  refreshBreakdownChart();
+}
+
+// =============================================================
+// 8. ACTION TOGGLE
+// =============================================================
+
+/**
+ * Toggle a reduction action on/off and update state.
+ * Exposed globally so inline onclick can access it.
+ * @param {string} actionId
+ * @param {number} savings   – kg CO₂ saved per month.
+ * @param {HTMLElement} btn
+ */
+window.toggleAction = function(actionId, savings, btn) {
+  const item      = btn.closest('.action-item');
+  const completed = state.completedActions.has(actionId);
+
+  if (completed) {
+    state.completedActions.delete(actionId);
+    state.co2Saved = Math.max(0, state.co2Saved - savings);
+    item.classList.remove('completed');
+    btn.textContent           = 'Complete';
+    btn.setAttribute('aria-pressed', 'false');
+    const action = ACTION_DATA.find(a => a.id === actionId);
+    btn.setAttribute('aria-label', `Complete action: ${action?.title}`);
+  } else {
+    state.completedActions.add(actionId);
+    state.co2Saved += savings;
+    item.classList.add('completed');
+    btn.textContent           = '✓ Done';
+    btn.setAttribute('aria-pressed', 'true');
+    const action = ACTION_DATA.find(a => a.id === actionId);
+    btn.setAttribute('aria-label', `Mark as incomplete: ${action?.title}`);
+    srAnnounce(`Action completed: ${action?.title}. ${savings} kg CO₂ saved.`);
+  }
+
+  updateState();
+};
+
+// =============================================================
+// 9. LOG FORM
+// =============================================================
+
+/**
+ * Handle activity log form submission.
+ * @param {Event} e
+ */
+function handleLogSubmit(e) {
+  e.preventDefault();
+  const errorEl = document.getElementById('log-error');
+
+  const date  = sanitiseInput(document.getElementById('log-date')?.value  || '');
+  const type  = sanitiseInput(document.getElementById('log-type')?.value  || '');
+  const value = document.getElementById('log-value')?.value ?? '';
+
+  const error = validateLogEntry(date, type, value);
+  if (error) {
+    if (errorEl) errorEl.textContent = error;
+    srAnnounce(`Form error: ${error}`);
+    return;
+  }
+  if (errorEl) errorEl.textContent = '';
+
+  const TYPE_LABELS = { driving: '🚗 Driving', energy: '⚡ Energy', flight: '✈️ Flight', meatless: '🥗 Meatless Day', recycled: '♻️ Recycled' };
+  const numVal = parseFloat(value) || 0;
+  const co2    = calcLogCo2(type, numVal);
+
+  const entry = { date, type, typeLabel: TYPE_LABELS[type] || type, value: numVal || null, co2 };
+  state.logs.push(entry);
+  localStorage.setItem('ecoLogs', JSON.stringify(state.logs));
+
+  renderLogHistory();
+  refreshTrendChart();
+  srAnnounce(`Activity logged: ${entry.typeLabel} on ${date}. ${co2} kg CO₂.`);
+  e.target.reset();
+}
+
+// =============================================================
+// 10. NAVIGATION
+// =============================================================
+
+/**
+ * Switch the visible tab/section.
+ * @param {string} targetId – The section element ID to show.
+ */
+function switchTab(targetId) {
+  document.querySelectorAll('.view').forEach(v => {
+    v.classList.remove('active-view');
+    v.hidden = true;
+  });
+  document.querySelectorAll('.nav-links li').forEach(l => {
+    l.classList.remove('active');
+    l.setAttribute('aria-selected', 'false');
+  });
+
+  const targetSection = document.getElementById(targetId);
+  const targetLink    = document.querySelector(`[data-target="${targetId}"]`);
+
+  if (targetSection) { targetSection.classList.add('active-view'); targetSection.hidden = false; }
+  if (targetLink)    { targetLink.classList.add('active'); targetLink.setAttribute('aria-selected', 'true'); }
+
+  // Move focus to main content for keyboard users
+  document.getElementById('main-content')?.focus({ preventScroll: true });
+}
+
+// =============================================================
+// 11. AI ADVISOR
+// =============================================================
+
+/**
+ * Add a message bubble to the chat window.
+ * Sanitises user content before insertion.
+ * @param {string} text
+ * @param {'ai'|'user'} sender
+ */
+function addMessage(text, sender) {
+  const win = document.getElementById('chatWindow');
+  if (!win) return;
+  const div = document.createElement('div');
+  div.className = `message ${sender}`;
+  div.setAttribute('role', 'article');
+  const p = document.createElement('p');
+  // Safe: only sets textContent for user messages
+  if (sender === 'user') {
+    p.textContent = text;
+  } else {
+    // AI responses can use simple bold formatting
+    p.innerHTML = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/<(?!strong|\/strong)[^>]+>/g, '');
+  }
+  div.appendChild(p);
+  win.appendChild(div);
+  win.scrollTop = win.scrollHeight;
 }
 
 function addTypingIndicator() {
-    const div = document.createElement('div');
-    div.className = `message ai typing`;
-    div.id = 'typingIndicator';
-    div.innerHTML = `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
-    elements.chatWindow.appendChild(div);
-    elements.chatWindow.scrollTop = elements.chatWindow.scrollHeight;
+  const win = document.getElementById('chatWindow');
+  if (!win) return;
+  const div = document.createElement('div');
+  div.className = 'message ai';
+  div.id = 'typingIndicator';
+  div.setAttribute('aria-label', 'AI is typing');
+  div.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+  win.appendChild(div);
+  win.scrollTop = win.scrollHeight;
 }
 
 function removeTypingIndicator() {
-    const ind = document.getElementById('typingIndicator');
-    if (ind) ind.remove();
+  document.getElementById('typingIndicator')?.remove();
 }
 
-async function handleChatSend(queryText = null) {
-    const text = queryText || elements.chatInput.value.trim();
-    if (!text) return;
-    
-    addMessage(text, 'user');
-    elements.chatInput.value = '';
-    addTypingIndicator();
-    
-    // Construct System Prompt + Profile Payload
-    const profile = `User Profile: Total CO2: ${state.footprint.total}T, Energy: ${state.footprint.energy}T, Transport: ${state.footprint.transport}T. EcoScore: ${state.ecoScore}.`;
-    const prompt = `You are EcoSphere's AI Eco-Advisor. Be concise, encouraging, and helpful. ${profile}\n\nUser Question: ${text}`;
-    
-    if (state.apiKey) {
-        // LIVE GEMINI API CALL
-        try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${state.apiKey}`;
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: prompt }] }]
-                })
-            });
-            const data = await response.json();
-            removeTypingIndicator();
-            
-            if (data.error) {
-                addMessage("API Error: " + data.error.message, 'ai');
-            } else {
-                let aiResponse = data.candidates[0].content.parts[0].text;
-                // Simple markdown-to-html replacement for bold
-                aiResponse = aiResponse.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-                addMessage(aiResponse, 'ai');
-            }
-        } catch (error) {
-            removeTypingIndicator();
-            addMessage("Network Error while connecting to Gemini API.", 'ai');
-        }
-    } else {
-        // SIMULATION MODE
-        setTimeout(() => {
-            removeTypingIndicator();
-            let res = "Based on your current profile, here is what I recommend. ";
-            if (text.toLowerCase().includes('analyze')) {
-                const highest = Object.keys(state.footprint).reduce((a, b) => state.footprint[a] > state.footprint[b] && a !== 'total' ? a : b);
-                res += `Your highest emission source is **${highest}** at ${state.footprint[highest]} Tons. I suggest tackling this first!`;
-            } else if (text.toLowerCase().includes('suggest')) {
-                res += "1. Start biking twice a week.<br>2. Wash clothes in cold water.<br>3. Try a plant-based diet on weekends.";
-            } else {
-                res += "Carbon offsets are investments in environmental projects that balance out your own carbon footprint. However, reducing emissions first is always better!";
-            }
-            addMessage(res, 'ai');
-        }, 1500);
+/**
+ * Build the system prompt with live user carbon profile.
+ * @returns {string}
+ */
+function buildSystemPrompt() {
+  const { total, energy, transport, diet, waste } = state.footprint;
+  return `You are EcoSphere's expert AI Eco-Advisor. Be concise, warm, and encouraging.
+User Carbon Profile:
+- Total: ${total} Tons CO₂/yr (global avg: 4.7 Tons)
+- Energy: ${energy} Tons | Transport: ${transport} Tons | Diet: ${diet} Tons | Waste: ${waste} Tons
+- Eco-Score: ${state.ecoScore}/100 | CO₂ Saved: ${state.co2Saved} kg
+Provide helpful, specific, actionable advice tailored to this profile.`;
+}
+
+/**
+ * Simulated AI response engine for demonstration without a real API key.
+ * @param {string} query
+ * @returns {string} Simulated response text.
+ */
+function simulatedAiResponse(query) {
+  const q = query.toLowerCase();
+  const { total, transport, energy } = state.footprint;
+  const highest = transport > energy ? 'transport' : 'energy';
+
+  if (q.includes('analyze') || q.includes('profile')) {
+    return `**Profile Analysis:**\n\nYour total footprint is **${total} Tons CO₂/yr**. Your highest emission source is **${highest}** (${state.footprint[highest].toFixed(2)} Tons).\n\n${total < 4.7 ? '✅ You are below the global average — excellent!' : '⚠️ You are above the global average. Tackling ' + highest + ' first will have the biggest impact.'}\n\nEco-Score: **${state.ecoScore}/100**`;
+  }
+  if (q.includes('suggest') || q.includes('action')) {
+    return `**Top 3 Personalised Actions:**\n\n1. 🚲 **Bike or transit twice a week** — saves ~15 kg CO₂/month\n2. 🌱 **Try meatless Mondays** — saves ~3 kg CO₂/week\n3. 💡 **Switch to LED lighting** — saves ~5 kg CO₂/month`;
+  }
+  if (q.includes('offset')) {
+    return `**Carbon Offsets Explained:**\n\nCarbon offsets let you compensate for emissions by funding projects that reduce CO₂ elsewhere — like reforestation or renewable energy. However, **reducing your own emissions first is always better**. Use offsets for unavoidable emissions like long-haul flights.`;
+  }
+  if (q.includes('transport') || q.includes('car')) {
+    return `**Reducing Transport Emissions:**\n\nYour transport footprint is **${state.footprint.transport.toFixed(2)} Tons/yr**.\n\n- 🚌 Use public transit 2×/week\n- 🚲 Cycle for trips under 5 miles\n- 🚗 If driving, carpool whenever possible\n- ⚡ Consider switching to an EV next purchase`;
+  }
+  return `**Eco-Advisor Response:**\n\nBased on your profile (${total} Tons CO₂/yr, Eco-Score ${state.ecoScore}/100), the best next step is to focus on your **${highest}** emissions. Try completing actions in the Reduce tab — each completed action boosts your Eco-Score! 🌿`;
+}
+
+/**
+ * Handle sending a chat message, with live Gemini API or simulation fallback.
+ * @param {string|null} preset – Optional preset prompt text.
+ */
+async function handleChatSend(preset = null) {
+  const inputEl = document.getElementById('chatInput');
+  const raw     = preset ?? inputEl?.value ?? '';
+  const text    = sanitiseInput(raw);
+  if (!text) return;
+
+  addMessage(text, 'user');
+  if (inputEl) inputEl.value = '';
+  addTypingIndicator();
+
+  if (state.apiKey) {
+    // Live Gemini API call
+    try {
+      const systemPrompt = buildSystemPrompt();
+      const fullPrompt   = `${systemPrompt}\n\nUser: ${text}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${state.apiKey}`;
+      const res = await fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      removeTypingIndicator();
+      const aiText = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? 'No response received.';
+      addMessage(aiText, 'ai');
+    } catch (err) {
+      removeTypingIndicator();
+      addMessage(`❌ API Error: ${sanitiseInput(err.message)}. Falling back to simulation.`, 'ai');
+      addMessage(simulatedAiResponse(text), 'ai');
     }
+  } else {
+    // Simulation mode
+    setTimeout(() => {
+      removeTypingIndicator();
+      addMessage(simulatedAiResponse(text), 'ai');
+    }, 1200);
+  }
 }
 
-elements.sendBtn.addEventListener('click', () => handleChatSend());
-elements.chatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(); });
+// =============================================================
+// 12. SETTINGS MODAL
+// =============================================================
 
-elements.quickPrompts.forEach(btn => {
-    btn.addEventListener('click', () => {
-        handleChatSend(btn.innerText);
-    });
+function openSettings() {
+  const modal  = document.getElementById('settingsModal');
+  const apiEl  = document.getElementById('geminiApiKey');
+  if (!modal)  return;
+  if (apiEl)   apiEl.value = state.apiKey;
+  modal.hidden = false;
+  modal.classList.add('active');
+  document.getElementById('openSettingsBtn')?.setAttribute('aria-expanded', 'true');
+  apiEl?.focus();
+}
+
+function closeSettings() {
+  const modal = document.getElementById('settingsModal');
+  if (!modal) return;
+  modal.hidden = true;
+  modal.classList.remove('active');
+  document.getElementById('openSettingsBtn')?.setAttribute('aria-expanded', 'false');
+  document.getElementById('openSettingsBtn')?.focus();
+}
+
+function saveSettings() {
+  const raw = document.getElementById('geminiApiKey')?.value ?? '';
+  const key = raw.trim();
+  localStorage.setItem('geminiApiKey', key);
+  state.apiKey = key;
+  closeSettings();
+
+  const badge = document.getElementById('ai-status');
+  if (badge) {
+    badge.textContent = key ? 'Live Gemini API' : 'Simulation Mode';
+    badge.className   = `status-badge${key ? ' live' : ''}`;
+  }
+  srAnnounce(key ? 'Gemini API key saved. Live mode enabled.' : 'API key cleared. Simulation mode active.');
+}
+
+// =============================================================
+// 13. KEYBOARD TRAPPING FOR MODAL (Accessibility)
+// =============================================================
+document.addEventListener('keydown', (e) => {
+  const modal = document.getElementById('settingsModal');
+  if (!modal || modal.hidden) return;
+  if (e.key === 'Escape') closeSettings();
+  if (e.key === 'Tab') {
+    const focusable = modal.querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])');
+    const first = focusable[0];
+    const last  = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
 });
 
-// --- INIT ---
-window.onload = () => {
-    initChart();
-    calculateFootprint();
-    renderActions();
-    renderBadges();
-    updateAiStatus();
+// =============================================================
+// 14. EVENT BINDING
+// =============================================================
+
+function bindEvents() {
+  // Navigation
+  document.querySelectorAll('.nav-links li').forEach(li => {
+    li.addEventListener('click',   () => switchTab(li.dataset.target));
+    li.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchTab(li.dataset.target); } });
+  });
+
+  // Calculator sliders
+  const bindSlider = (id, valId, ariaId) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      safeSetText(valId, el.value);
+      el.setAttribute('aria-valuenow', el.value);
+      updateState();
+    });
+  };
+  bindSlider('slider-energy',    'val-energy',    'slider-energy');
+  bindSlider('slider-transport', 'val-transport', 'slider-transport');
+  bindSlider('slider-waste',     'val-waste',     'slider-waste');
+
+  // Diet buttons
+  document.querySelectorAll('#diet-group .btn-select').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#diet-group .btn-select').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-pressed', 'false');
+      });
+      btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
+      state.activeDiet = btn.dataset.value;
+      updateState();
+    });
+  });
+
+  // Log form
+  document.getElementById('logForm')?.addEventListener('submit', handleLogSubmit);
+
+  // AI chat
+  document.getElementById('sendBtn')?.addEventListener('click', () => handleChatSend());
+  document.getElementById('chatInput')?.addEventListener('keypress', e => { if (e.key === 'Enter') handleChatSend(); });
+  document.querySelectorAll('.prompt-btn').forEach(btn => {
+    btn.addEventListener('click', () => handleChatSend(btn.textContent.trim()));
+  });
+
+  // Settings
+  document.getElementById('openSettingsBtn')?.addEventListener('click', openSettings);
+  document.getElementById('closeModalBtn')?.addEventListener('click',   closeSettings);
+  document.getElementById('saveSettingsBtn')?.addEventListener('click', saveSettings);
+
+  // Run tests button
+  document.getElementById('runTestsBtn')?.addEventListener('click', () => {
+    if (typeof window.runTests === 'function') window.runTests();
+  });
+}
+
+// =============================================================
+// 15. INITIALISATION
+// =============================================================
+
+window.addEventListener('DOMContentLoaded', () => {
+  // Set today's date as default for log form
+  const logDate = document.getElementById('log-date');
+  if (logDate) logDate.value = new Date().toISOString().split('T')[0];
+
+  // Set AI status badge
+  const badge = document.getElementById('ai-status');
+  if (badge && state.apiKey) {
+    badge.textContent = 'Live Gemini API';
+    badge.classList.add('live');
+  }
+
+  // Init charts
+  initBreakdownChart();
+  initTrendChart();
+
+  // Render dynamic content
+  renderActions();
+  renderLogHistory();
+
+  // Bind all event listeners
+  bindEvents();
+
+  // Initial calculation
+  updateState();
+});
+
+// Export pure functions for unit testing (accessed via window in browser context)
+window.__ECOSPHERE_INTERNALS__ = {
+  calcFootprint, calcEcoScore, calcReductionPct,
+  calcUnlockedBadges, sanitiseInput, validateLogEntry, calcLogCo2
 };

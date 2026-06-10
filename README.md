@@ -1,66 +1,98 @@
 # EcoSphere: Carbon Footprint Awareness Platform
 
-EcoSphere is a beautifully designed, high-fidelity Carbon Footprint Awareness Platform built to help individuals calculate, track, and systematically reduce their environmental impact. 
-
-This repository was specifically built for the **Hack2Skill Prompt Wars Hackathon**. It focuses heavily on ultra-fast execution, zero-dependency efficiency, and an integrated AI Prompt workflow using Google Gemini.
+> A smart, interactive platform to **Understand**, **Track**, and **Reduce** your personal carbon footprint — powered by a live Gemini AI Eco-Advisor.
 
 ---
 
 ## 🌍 Chosen Vertical
-**Carbon Footprint Awareness Platform**
-We chose this vertical to design a solution that helps individuals understand, track, and reduce their carbon footprint through simple actions and personalized insights.
+**Carbon Footprint Awareness Platform** — Designing a solution that helps individuals understand, track, and reduce their carbon footprint through simple actions and personalized insights.
 
 ---
 
 ## 🧠 Approach and Logic
 
-The platform is designed as a **dynamic, gamified Single-Page Application (SPA)** that revolves around behavioral change and logical decision making based on the user's context.
+EcoSphere is a single-page web application with **zero build-step dependencies** (pure HTML/CSS/JS). The platform is structured around the three core pillars of the challenge:
 
-### 1. Context Acquisition (The Calculator)
-Users input their real-world data (Energy in kWh, Transport in miles, Diet choices, and Waste generation). 
-- **Logic**: We use standardized emission factors (e.g., `0.0004 Tons CO2 per kWh`) to convert raw inputs into an annualized Carbon Footprint profile.
+### 1. Understand 📖
+The **Understand** tab provides educational content on the four major emission categories (Energy, Transport, Diet, Waste), backed by IPCC data. Users learn global context: the 1.5°C Paris Agreement target, average per-capita emissions, and the impact of individual lifestyle choices.
 
-### 2. Gamified Reduction (Action Plan)
-Instead of just showing a scary number, EcoSphere generates an actionable checklist.
-- **Logic**: Every time a user commits to an action (e.g., "Meatless Monday"), their "Eco-Score" dynamically increases, and their active Monthly CO2 Saved increases. The UI uses micro-animations and unlocks **Badges/Achievements** to reward the user's progress.
+### 2. Calculate & Track 📊
+- **Calculator Tab**: Interactive sliders and diet selectors compute an annualized carbon footprint using IPCC/EPA emission factors (e.g., `0.000385 Tons CO₂ per kWh`). Results update in real-time with a Chart.js doughnut visualization.
+- **Track Tab**: A daily activity logger stores entries in `localStorage` with a persistent line chart showing emission trends over time. Supports: driving, energy, flights, meatless days, and recycling.
 
-### 3. Smart Dynamic Assistant (AI Eco-Advisor)
-We integrated an intelligent AI layer using Google's **Gemini 1.5 Flash API**. 
-- **Logic**: The app dynamically compiles a "System Prompt + User Profile Payload" (injecting the user's exact emission metrics from the calculator) before sending it to the LLM. This enables the LLM to provide highly personalized, logical decision-making recommendations (e.g., *"Since your transport emissions are your highest source at 3.1 Tons, let's focus on carpooling..."*).
+### 3. Reduce 🌱
+- **Action Plan Tab**: Categorized (Easy/Medium/Hard) reduction tasks with precise CO₂ savings estimates. Completing tasks boosts the user's **Eco-Score** and dynamically unlocks **achievement badges**.
+- **AI Eco-Advisor Tab**: Powered by **Google Gemini 1.5 Flash**. The app dynamically compiles the user's live emission profile into a system prompt payload and sends it to Gemini for personalized recommendations. Falls back to a rules-based simulation engine if no API key is provided.
 
 ---
 
 ## ⚙️ How the Solution Works
 
-EcoSphere is built with **pure HTML5, CSS3 (Vanilla), and JavaScript (ES6)**. It requires NO build steps, NO `npm install`, and NO heavy frameworks, ensuring maximum efficiency and a repository size well under 10 MB.
+### Running Locally
+```bash
+# No installation needed. Just clone and open!
+git clone https://github.com/HeetSoni26/eco-sphere.git
+cd eco-sphere
+# Open index.html in any modern browser
+# OR serve via Python:
+python -m http.server 8080
+# Then visit http://localhost:8080
+```
 
-### Running the App
-1. Clone this repository.
-2. Open `index.html` directly in any modern web browser.
-3. Use the sidebar navigation to switch between the Dashboard, Calculator, Action Plan, and AI Advisor.
+### AI Advisor Setup (Optional)
+1. Click the **⚙️ Settings** icon (top-right).
+2. Enter your **Gemini API Key** — stored securely in your browser's `localStorage`.
+3. Navigate to the **AI Advisor** tab to chat with your live Eco-Advisor.
 
-### Using the Gemini AI Advisor
-The app features a built-in AI Advisor. 
-1. Click the **Settings Gear** icon in the top right.
-2. Enter your **Gemini API Key** (this is stored securely in your browser's local storage and ONLY sent directly to Google's API endpoint).
-3. Navigate to the **AI Advisor** tab and chat!
-4. *Simulation Mode*: If you don't enter an API Key, the app will gracefully fallback to a simulated template engine that mimics the AI's personalized responses to showcase the intended UX.
+> Without a key, the app uses a built-in rules-based simulation engine demonstrating the full UX.
+
+### Running Tests
+1. Navigate to the **Tests** tab (🧪 in the sidebar).
+2. Click **"Run All Tests"** — a full unit test suite runs covering 50+ test cases across all core logic functions.
+3. Results are displayed in the UI and also logged to the browser console.
+
+---
+
+## 📁 Project Structure
+
+```
+eco-sphere/
+│
+├── index.html    # Semantic HTML5 SPA — ARIA roles, skip links, live regions
+├── index.css     # WCAG AA compliant design system — glassmorphism, responsive
+├── app.js        # Core logic: state, calculator, AI advisor, charts, accessibility
+├── tests.js      # 50+ unit tests covering all pure functions
+└── README.md     # This file
+```
 
 ---
 
-## 📊 Assumptions Made
-1. **Emission Factors**: We assume standard approximate global baseline values for calculations (e.g., an average meat-eater produces 2.5 Tons CO2/yr from diet, 1 mile driven produces ~0.0004 Tons CO2).
-2. **User Habit Tracking**: We assume the user updates their slider settings weekly/monthly to accurately reflect their true lifestyle changes.
-3. **Local Privacy**: We assume maximum user privacy is preferred, thus all state and API keys are stored purely client-side without a backend database.
+## 🔬 Assumptions Made
+
+| Category | Assumption |
+|---|---|
+| Energy emissions | `0.000385 Tons CO₂ per kWh` (global average grid, IEA 2023) |
+| Transport emissions | `0.000404 Tons CO₂ per mile` (average petrol car, EPA) |
+| Diet — meat-heavy | `3.3 Tons CO₂/yr` (Oxford Food & Climate Research) |
+| Diet — average | `2.5 Tons CO₂/yr` |
+| Diet — vegetarian | `1.7 Tons CO₂/yr` |
+| Diet — vegan | `1.5 Tons CO₂/yr` |
+| Waste per bag | `0.019 Tons CO₂` per bag per year |
+| Global baseline | `16 Tons/yr` (US average, used for reduction % computation) |
+| Flight | `90 kg CO₂ per flight hour` (economy seat, ICAO average) |
 
 ---
 
-## 🏆 Evaluation Focus Areas Addressed
-- **Code Quality**: Modular vanilla JS structure, avoiding spaghetti code by separating state, DOM queries, charting, and AI logic into distinct blocks.
-- **Security**: The Gemini API key is *never* hardcoded. It is injected at runtime and kept purely client-side to prevent key leaks. Input is sanitized via standard JS DOM insertion.
-- **Efficiency**: Utilizing a CDN for `Chart.js` and vanilla CSS keeps the payload incredibly light (total size < 1 MB). Loads instantly.
-- **Testing**: Manual UI test validation steps were utilized. The pure JS functions (`calculateFootprint`, `checkBadges`) are designed as pure functions acting on a single `state` object, making them highly predictable and easy to unit test.
-- **Accessibility**: Dark mode ensures high contrast. Semantic HTML structure (e.g., `<main>`, `<nav>`, `<section>`) is used. Buttons and sliders are keyboard-accessible.
+## 🏆 Evaluation Focus Areas
+
+| Criterion | Implementation |
+|---|---|
+| **Code Quality** | Modular ES6+ with full JSDoc on every function. Single-source-of-truth state object. Pure functions separated from UI renderers. |
+| **Security** | `sanitiseInput()` strips all HTML tags (XSS prevention). API key stored only in `localStorage`, never hardcoded. Keyboard trap and focus management in modal. `novalidate` with manual validation prevents leaking form data. |
+| **Efficiency** | Zero npm dependencies. Chart.js via CDN. Entire codebase < 1 MB. No build step. O(n) renders. `localStorage` persistence eliminates repeat computation. |
+| **Testing** | `tests.js` contains **50+ unit tests** across 7 test suites using a built-in lightweight test runner. Covers: `calcFootprint`, `calcEcoScore`, `calcReductionPct`, `calcUnlockedBadges`, `sanitiseInput`, `validateLogEntry`, `calcLogCo2`. Auto-runs on page load (console) and manually via UI. |
+| **Accessibility** | WCAG AA compliant. Skip-to-content link. Full `aria-*` roles, labels, and live regions. Focus-visible outlines. Keyboard navigation for all interactive elements. Tab key trap in modal. Screen-reader announcer for dynamic updates. Mobile-responsive layout. |
 
 ---
-*Built with ❤️ using Google Antigravity IDE.*
+
+*Built with ❤️ using Google Antigravity IDE for the Hack2Skill Prompt Wars Hackathon.*
