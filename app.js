@@ -52,6 +52,34 @@ const SANITISE_RE = /<[^>]*>/g;
  * Centralized mutable application state.
  * All functions READ from and WRITE to this object.
  */
+/**
+ * Safely read a value from localStorage without throwing in
+ * private-browsing or restricted environments.
+ * @param {string} key
+ * @param {string} fallback
+ * @returns {string}
+ */
+function safeLocalStorageGet(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+/**
+ * Safely write a value to localStorage.
+ * @param {string} key
+ * @param {string} value
+ */
+function safeLocalStorageSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (_) {
+    console.warn('[EcoSphere] localStorage unavailable. Data will not persist.');
+  }
+}
+
 const state = {
   footprint: {
     energy:    0,
@@ -65,8 +93,8 @@ const state = {
   reductionPct:     0,
   activeDiet:       'avg',
   completedActions: new Set(),
-  logs:             JSON.parse(localStorage.getItem('ecoLogs') || '[]'),
-  apiKey:           localStorage.getItem('geminiApiKey') || ''
+  logs:             JSON.parse(safeLocalStorageGet('ecoLogs', '[]')),
+  apiKey:           safeLocalStorageGet('geminiApiKey', '')
 };
 
 // =============================================================
@@ -230,7 +258,7 @@ function initBreakdownChart() {
           position: 'bottom',
           labels: { color: '#f1f5f9', padding: 14, font: { family: 'Outfit', size: 12 } }
         },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.toFixed(2)} Tons CO₂` } }
+        tooltip: { callbacks: { label: (tooltipItem) => ` ${tooltipItem.parsed.toFixed(2)} Tons CO₂` } }
       }
     }
   });
@@ -356,14 +384,30 @@ function renderBadges() {
   grid.innerHTML = '';
   BADGE_DATA.forEach(badge => {
     const unlocked = unlockedIds.has(badge.id);
+
+    // Build DOM nodes safely — no innerHTML
     const div = document.createElement('div');
-    div.className  = `badge${unlocked ? ' unlocked' : ''}`;
+    div.className = `badge${unlocked ? ' unlocked' : ''}`;
     div.setAttribute('role', 'listitem');
     div.setAttribute('aria-label', `${badge.name} – ${unlocked ? 'Unlocked' : 'Locked: ' + badge.req}`);
-    div.innerHTML  = `<i class="fa-solid ${badge.icon}" aria-hidden="true"></i>
-                      <span class="badge-name">${badge.name}</span>
-                      <span class="badge-req">${badge.req}</span>`;
+
+    const icon = document.createElement('i');
+    icon.className = `fa-solid ${badge.icon}`;
+    icon.setAttribute('aria-hidden', 'true');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'badge-name';
+    nameSpan.textContent = badge.name;
+
+    const reqSpan = document.createElement('span');
+    reqSpan.className = 'badge-req';
+    reqSpan.textContent = badge.req;
+
+    div.appendChild(icon);
+    div.appendChild(nameSpan);
+    div.appendChild(reqSpan);
     grid.appendChild(div);
+
     if (unlocked) srAnnounce(`Achievement unlocked: ${badge.name}`);
   });
 }
@@ -425,21 +469,41 @@ function renderActions() {
 function renderLogHistory() {
   const container = document.getElementById('logHistory');
   if (!container) return;
+  container.innerHTML = '';
+
   if (state.logs.length === 0) {
-    container.innerHTML = '<p class="text-muted" style="padding:1rem">No logs yet. Add activities above.</p>';
+    const msg = document.createElement('p');
+    msg.className = 'text-muted';
+    msg.style.padding = '1rem';
+    msg.textContent = 'No logs yet. Add activities above.';
+    container.appendChild(msg);
     return;
   }
-  container.innerHTML = '';
+
+  // Build log rows safely — no innerHTML
   [...state.logs].reverse().forEach(log => {
     const div = document.createElement('div');
     div.className = 'log-entry';
     div.setAttribute('role', 'listitem');
-    const sign = log.co2 < 0 ? '' : '+';
-    div.innerHTML = `
-      <span>${log.typeLabel}</span>
-      <span>${log.value ?? ''}</span>
-      <span class="${log.co2 < 0 ? 'text-emerald' : 'text-coral'}">${sign}${log.co2} kg CO₂</span>
-      <span class="log-date">${log.date}</span>`;
+
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = log.typeLabel;
+
+    const valueSpan = document.createElement('span');
+    valueSpan.textContent = log.value != null ? String(log.value) : '';
+
+    const co2Span = document.createElement('span');
+    co2Span.className = log.co2 < 0 ? 'text-emerald' : 'text-coral';
+    co2Span.textContent = `${log.co2 < 0 ? '' : '+'}${log.co2} kg CO₂`;
+
+    const dateSpan = document.createElement('span');
+    dateSpan.className = 'log-date';
+    dateSpan.textContent = log.date;
+
+    div.appendChild(labelSpan);
+    div.appendChild(valueSpan);
+    div.appendChild(co2Span);
+    div.appendChild(dateSpan);
     container.appendChild(div);
   });
 }
@@ -473,9 +537,9 @@ function updateCalcPreviews() {
  * Recalculate state from current form inputs and re-render the UI.
  */
 function updateState() {
-  const energyVal    = parseInt(document.getElementById('slider-energy')?.value    || 300);
-  const transportVal = parseInt(document.getElementById('slider-transport')?.value || 150);
-  const wasteVal     = parseInt(document.getElementById('slider-waste')?.value     || 3);
+  const energyVal    = parseInt(document.getElementById('slider-energy')?.value    || '300', 10);
+  const transportVal = parseInt(document.getElementById('slider-transport')?.value || '150', 10);
+  const wasteVal     = parseInt(document.getElementById('slider-waste')?.value     || '3',   10);
 
   state.footprint   = calcFootprint(energyVal, transportVal, state.activeDiet, wasteVal);
   state.ecoScore    = calcEcoScore(state.footprint.total, state.completedActions.size);
@@ -524,9 +588,6 @@ function handleActionToggle(actionId, savings, btn) {
   updateState();
 }
 
-// Keep window.toggleAction for backward-compatibility (unused in v2 but retained)
-window.toggleAction = handleActionToggle;
-
 // =============================================================
 // 9. LOG FORM
 // =============================================================
@@ -557,7 +618,7 @@ function handleLogSubmit(e) {
 
   const entry = { date, type, typeLabel: TYPE_LABELS[type] || type, value: numVal || null, co2 };
   state.logs.push(entry);
-  localStorage.setItem('ecoLogs', JSON.stringify(state.logs));
+  safeLocalStorageSet('ecoLogs', JSON.stringify(state.logs));
 
   renderLogHistory();
   refreshTrendChart();
@@ -625,11 +686,19 @@ function addMessage(text, sender) {
 function addTypingIndicator() {
   const win = document.getElementById('chatWindow');
   if (!win) return;
+
+  // Build typing indicator safely — no innerHTML
   const div = document.createElement('div');
   div.className = 'message ai';
   div.id = 'typingIndicator';
   div.setAttribute('aria-label', 'AI is typing');
-  div.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+
+  const dots = document.createElement('div');
+  dots.className = 'typing-dots';
+  for (let i = 0; i < 3; i++) {
+    dots.appendChild(document.createElement('span'));
+  }
+  div.appendChild(dots);
   win.appendChild(div);
   win.scrollTop = win.scrollHeight;
 }
@@ -746,7 +815,7 @@ function closeSettings() {
 function saveSettings() {
   const raw = document.getElementById('geminiApiKey')?.value ?? '';
   const key = raw.trim();
-  localStorage.setItem('geminiApiKey', key);
+  safeLocalStorageSet('geminiApiKey', key);
   state.apiKey = key;
   closeSettings();
 
@@ -870,8 +939,9 @@ window.addEventListener('DOMContentLoaded', () => {
   updateState();
 });
 
-// Export pure functions for unit testing (accessed via window in browser context)
+// Export functions for unit testing (accessed via window in browser context)
 window.__ECOSPHERE_INTERNALS__ = {
   calcFootprint, calcEcoScore, calcReductionPct,
-  calcUnlockedBadges, sanitiseInput, validateLogEntry, calcLogCo2
+  calcUnlockedBadges, sanitiseInput, validateLogEntry, calcLogCo2,
+  buildSystemPrompt, simulatedAiResponse, safeLocalStorageGet
 };
