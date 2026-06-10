@@ -775,17 +775,20 @@ body {
 /* =========================================================
    MODAL
    ========================================================= */
+/* Modal: hidden by default via the [hidden] HTML attribute.
+   JS toggles modal.hidden = true/false to show/hide.
+   This avoids redundant class + attribute toggling. */
 .modal {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.65);
   backdrop-filter: blur(5px);
   z-index: 1000;
+  display: flex;
   justify-content: center;
   align-items: center;
-  display: none;
 }
-.modal:not([hidden]) { display: flex; }
+.modal[hidden] { display: none !important; }
 
 .modal-content {
   width: 420px;

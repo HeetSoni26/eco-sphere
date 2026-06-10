@@ -303,10 +303,13 @@ function renderDashboard() {
   const saved        = state.co2Saved;
   const reductionPct = state.reductionPct;
 
-  // KPI Cards
-  safeSetText('dash-total-co2', `${total} Tons CO₂/yr`);
-  safeSetText('dash-saved-co2', `${saved} kg this month`);
-  safeSetText('dash-reduction', `${reductionPct}% vs baseline`);
+  // KPI Cards – use innerHTML to preserve the styled <span class="unit"> inside each metric element
+  const totalEl = document.getElementById('dash-total-co2');
+  if (totalEl) totalEl.innerHTML = `${total} <span class="unit">Tons CO₂/yr</span>`;
+  const savedEl = document.getElementById('dash-saved-co2');
+  if (savedEl) savedEl.innerHTML = `${saved} <span class="unit">kg this month</span>`;
+  const redEl = document.getElementById('dash-reduction');
+  if (redEl) redEl.innerHTML = `${reductionPct}% <span class="unit">vs baseline</span>`;
 
   // Sidebar score
   safeSetText('nav-eco-score', `${score}/100`);
@@ -367,6 +370,7 @@ function renderBadges() {
 
 /**
  * Render the action plan list.
+ * Uses data attributes + event delegation (no inline onclick handlers).
  */
 function renderActions() {
   const list = document.getElementById('actionList');
@@ -377,19 +381,40 @@ function renderActions() {
     const item = document.createElement('div');
     item.className = `action-item${completed ? ' completed' : ''}`;
     item.setAttribute('role', 'listitem');
-    item.innerHTML = `
-      <div class="action-info">
-        <h4><i class="fa-solid ${action.icon}" aria-hidden="true"></i> ${action.title}</h4>
-        <p>${action.desc}</p>
-        <p class="action-savings">💚 Saves ~${action.savings} kg CO₂/month</p>
-      </div>
-      <span class="action-difficulty difficulty-${action.difficulty}" aria-label="Difficulty: ${action.difficulty}">${action.difficulty}</span>
-      <button class="btn-action"
-        aria-pressed="${completed}"
-        aria-label="${completed ? 'Mark as incomplete: ' : 'Complete action: '}${action.title}"
-        onclick="toggleAction('${action.id}', ${action.savings}, this)">
-        ${completed ? '✓ Done' : 'Complete'}
-      </button>`;
+
+    const info = document.createElement('div');
+    info.className = 'action-info';
+    const h4 = document.createElement('h4');
+    const icon = document.createElement('i');
+    icon.className = `fa-solid ${action.icon}`;
+    icon.setAttribute('aria-hidden', 'true');
+    h4.appendChild(icon);
+    h4.appendChild(document.createTextNode(` ${action.title}`));
+    const desc = document.createElement('p');
+    desc.textContent = action.desc;
+    const savings = document.createElement('p');
+    savings.className = 'action-savings';
+    savings.textContent = `💚 Saves ~${action.savings} kg CO₂/month`;
+    info.appendChild(h4);
+    info.appendChild(desc);
+    info.appendChild(savings);
+
+    const diffBadge = document.createElement('span');
+    diffBadge.className = `action-difficulty difficulty-${action.difficulty}`;
+    diffBadge.setAttribute('aria-label', `Difficulty: ${action.difficulty}`);
+    diffBadge.textContent = action.difficulty;
+
+    const btn = document.createElement('button');
+    btn.className = 'btn-action';
+    btn.dataset.actionId = action.id;
+    btn.dataset.savings = action.savings;
+    btn.setAttribute('aria-pressed', String(completed));
+    btn.setAttribute('aria-label', `${completed ? 'Mark as incomplete: ' : 'Complete action: '}${action.title}`);
+    btn.textContent = completed ? '✓ Done' : 'Complete';
+
+    item.appendChild(info);
+    item.appendChild(diffBadge);
+    item.appendChild(btn);
     list.appendChild(item);
   });
 }
@@ -468,12 +493,12 @@ function updateState() {
 
 /**
  * Toggle a reduction action on/off and update state.
- * Exposed globally so inline onclick can access it.
+ * Called via event delegation on the action list.
  * @param {string} actionId
- * @param {number} savings   – kg CO₂ saved per month.
+ * @param {number} savings   - kg CO₂ saved per month.
  * @param {HTMLElement} btn
  */
-window.toggleAction = function(actionId, savings, btn) {
+function handleActionToggle(actionId, savings, btn) {
   const item      = btn.closest('.action-item');
   const completed = state.completedActions.has(actionId);
 
@@ -481,7 +506,7 @@ window.toggleAction = function(actionId, savings, btn) {
     state.completedActions.delete(actionId);
     state.co2Saved = Math.max(0, state.co2Saved - savings);
     item.classList.remove('completed');
-    btn.textContent           = 'Complete';
+    btn.textContent = 'Complete';
     btn.setAttribute('aria-pressed', 'false');
     const action = ACTION_DATA.find(a => a.id === actionId);
     btn.setAttribute('aria-label', `Complete action: ${action?.title}`);
@@ -489,7 +514,7 @@ window.toggleAction = function(actionId, savings, btn) {
     state.completedActions.add(actionId);
     state.co2Saved += savings;
     item.classList.add('completed');
-    btn.textContent           = '✓ Done';
+    btn.textContent = '✓ Done';
     btn.setAttribute('aria-pressed', 'true');
     const action = ACTION_DATA.find(a => a.id === actionId);
     btn.setAttribute('aria-label', `Mark as incomplete: ${action?.title}`);
@@ -497,7 +522,10 @@ window.toggleAction = function(actionId, savings, btn) {
   }
 
   updateState();
-};
+}
+
+// Keep window.toggleAction for backward-compatibility (unused in v2 but retained)
+window.toggleAction = handleActionToggle;
 
 // =============================================================
 // 9. LOG FORM
@@ -698,12 +726,11 @@ async function handleChatSend(preset = null) {
 // =============================================================
 
 function openSettings() {
-  const modal  = document.getElementById('settingsModal');
-  const apiEl  = document.getElementById('geminiApiKey');
-  if (!modal)  return;
-  if (apiEl)   apiEl.value = state.apiKey;
+  const modal = document.getElementById('settingsModal');
+  const apiEl = document.getElementById('geminiApiKey');
+  if (!modal) return;
+  if (apiEl) apiEl.value = state.apiKey;
   modal.hidden = false;
-  modal.classList.add('active');
   document.getElementById('openSettingsBtn')?.setAttribute('aria-expanded', 'true');
   apiEl?.focus();
 }
@@ -712,7 +739,6 @@ function closeSettings() {
   const modal = document.getElementById('settingsModal');
   if (!modal) return;
   modal.hidden = true;
-  modal.classList.remove('active');
   document.getElementById('openSettingsBtn')?.setAttribute('aria-expanded', 'false');
   document.getElementById('openSettingsBtn')?.focus();
 }
@@ -787,10 +813,15 @@ function bindEvents() {
     });
   });
 
+  // Action list — event delegation (no inline onclick)
+  document.getElementById('actionList')?.addEventListener('click', e => {
+    const btn = e.target.closest('.btn-action');
+    if (!btn) return;
+    handleActionToggle(btn.dataset.actionId, Number(btn.dataset.savings), btn);
+  });
+
   // Log form
   document.getElementById('logForm')?.addEventListener('submit', handleLogSubmit);
-
-  // AI chat
   document.getElementById('sendBtn')?.addEventListener('click', () => handleChatSend());
   document.getElementById('chatInput')?.addEventListener('keypress', e => { if (e.key === 'Enter') handleChatSend(); });
   document.querySelectorAll('.prompt-btn').forEach(btn => {

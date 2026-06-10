@@ -26,25 +26,25 @@
       </div>
 
       <ul class="nav-links" role="tablist" aria-label="Application sections">
-        <li role="tab" aria-selected="true"  tabindex="0" data-target="dashboard"   aria-controls="dashboard">
+        <li id="tab-dashboard"  role="tab" aria-selected="true"  tabindex="0" data-target="dashboard"  aria-controls="dashboard">
           <i class="fa-solid fa-chart-pie" aria-hidden="true"></i><span>Dashboard</span>
         </li>
-        <li role="tab" aria-selected="false" tabindex="0" data-target="understand"  aria-controls="understand">
+        <li id="tab-understand" role="tab" aria-selected="false" tabindex="0" data-target="understand" aria-controls="understand">
           <i class="fa-solid fa-book-open" aria-hidden="true"></i><span>Understand</span>
         </li>
-        <li role="tab" aria-selected="false" tabindex="0" data-target="calculator"  aria-controls="calculator">
+        <li id="tab-calculator" role="tab" aria-selected="false" tabindex="0" data-target="calculator" aria-controls="calculator">
           <i class="fa-solid fa-calculator" aria-hidden="true"></i><span>Calculate</span>
         </li>
-        <li role="tab" aria-selected="false" tabindex="0" data-target="track"       aria-controls="track">
+        <li id="tab-track"      role="tab" aria-selected="false" tabindex="0" data-target="track"      aria-controls="track">
           <i class="fa-solid fa-chart-line" aria-hidden="true"></i><span>Track</span>
         </li>
-        <li role="tab" aria-selected="false" tabindex="0" data-target="actions"     aria-controls="actions">
+        <li id="tab-actions"    role="tab" aria-selected="false" tabindex="0" data-target="actions"    aria-controls="actions">
           <i class="fa-solid fa-list-check" aria-hidden="true"></i><span>Reduce</span>
         </li>
-        <li role="tab" aria-selected="false" tabindex="0" data-target="ai-advisor"  aria-controls="ai-advisor">
+        <li id="tab-ai-advisor" role="tab" aria-selected="false" tabindex="0" data-target="ai-advisor" aria-controls="ai-advisor">
           <i class="fa-solid fa-robot" aria-hidden="true"></i><span>AI Advisor</span>
         </li>
-        <li role="tab" aria-selected="false" tabindex="0" data-target="tests"       aria-controls="tests">
+        <li id="tab-tests"      role="tab" aria-selected="false" tabindex="0" data-target="tests"      aria-controls="tests">
           <i class="fa-solid fa-flask" aria-hidden="true"></i><span>Tests</span>
         </li>
       </ul>
@@ -193,7 +193,7 @@
             <input type="range" id="slider-waste" name="waste" min="0" max="10" value="3" step="1"
               class="slider" aria-valuemin="0" aria-valuemax="10" aria-valuenow="3"
               aria-label="Number of waste bags generated per week" />
-            <p class="calc-preview" id="preview-waste" aria-live="polite">≈ 3.12 Tons CO₂/yr from waste</p>
+            <p class="calc-preview" id="preview-waste" aria-live="polite">≈ 2.96 Tons CO₂/yr from waste</p>
           </fieldset>
 
           <div class="calc-result glass-panel" aria-live="assertive" aria-atomic="true">
@@ -314,6 +314,7 @@
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->
+  <!-- Uses only `hidden` attribute to toggle visibility (controlled by JS) -->
   <div id="settingsModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
     <div class="modal-content glass-panel">
       <h2 id="settingsTitle">Settings</h2>
