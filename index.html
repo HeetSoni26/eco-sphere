@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoSphere | Carbon Footprint Platform</title>
+    <link rel="stylesheet" href="index.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar glass-panel">
+            <div class="logo">
+                <i class="fa-solid fa-earth-americas text-emerald"></i>
+                <span>EcoSphere</span>
+            </div>
+            <ul class="nav-links">
+                <li class="active" data-target="dashboard"><i class="fa-solid fa-chart-pie"></i> Dashboard</li>
+                <li data-target="calculator"><i class="fa-solid fa-calculator"></i> Calculator</li>
+                <li data-target="actions"><i class="fa-solid fa-list-check"></i> Action Plan</li>
+                <li data-target="ai-advisor"><i class="fa-solid fa-robot"></i> AI Advisor</li>
+            </ul>
+            <div class="user-score-widget">
+                <p>Eco-Score</p>
+                <h2 id="nav-eco-score" class="text-neon">85/100</h2>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <header class="topbar">
+                <h1>Welcome back, <span class="text-emerald">Eco-Warrior</span></h1>
+                <div class="settings" id="openSettingsBtn">
+                    <i class="fa-solid fa-gear"></i> Settings
+                </div>
+            </header>
+
+            <!-- DASHBOARD VIEW -->
+            <section id="dashboard" class="view active-view">
+                <div class="kpi-grid">
+                    <div class="kpi-card glass-panel">
+                        <i class="fa-solid fa-cloud text-gray"></i>
+                        <h3>Total Footprint</h3>
+                        <p class="metric" id="dash-total-co2">0.0 <span class="unit">Tons CO₂/yr</span></p>
+                    </div>
+                    <div class="kpi-card glass-panel">
+                        <i class="fa-solid fa-leaf text-emerald"></i>
+                        <h3>CO₂ Saved</h3>
+                        <p class="metric" id="dash-saved-co2">0 <span class="unit">kg this month</span></p>
+                    </div>
+                    <div class="kpi-card glass-panel">
+                        <i class="fa-solid fa-medal text-warning"></i>
+                        <h3>Active Actions</h3>
+                        <p class="metric" id="dash-active-actions">0 <span class="unit">Tasks</span></p>
+                    </div>
+                </div>
+
+                <div class="dashboard-charts">
+                    <div class="chart-container glass-panel">
+                        <h3>Footprint Breakdown</h3>
+                        <canvas id="breakdownChart"></canvas>
+                    </div>
+                    <div class="achievements-container glass-panel">
+                        <h3>Recent Achievements</h3>
+                        <div class="badges-grid" id="badgesGrid">
+                            <!-- Badges rendered via JS -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- CALCULATOR VIEW -->
+            <section id="calculator" class="view">
+                <div class="calc-container glass-panel">
+                    <h2>Calculate Your Footprint</h2>
+                    <p class="subtext">Adjust the sliders to estimate your annual emissions.</p>
+                    
+                    <div class="calc-section">
+                        <h3><i class="fa-solid fa-bolt text-warning"></i> Energy (kWh/month)</h3>
+                        <div class="slider-group">
+                            <span id="val-energy">300</span>
+                            <input type="range" id="slider-energy" min="0" max="1500" value="300" class="slider">
+                        </div>
+                    </div>
+
+                    <div class="calc-section">
+                        <h3><i class="fa-solid fa-car text-coral"></i> Transport (Miles/week)</h3>
+                        <div class="slider-group">
+                            <span id="val-transport">150</span>
+                            <input type="range" id="slider-transport" min="0" max="1000" value="150" class="slider">
+                        </div>
+                    </div>
+
+                    <div class="calc-section">
+                        <h3><i class="fa-solid fa-utensils text-emerald"></i> Diet</h3>
+                        <div class="button-group" id="diet-group">
+                            <button class="btn-select" data-value="high">Meat Heavy</button>
+                            <button class="btn-select active" data-value="avg">Average</button>
+                            <button class="btn-select" data-value="veg">Vegetarian</button>
+                            <button class="btn-select" data-value="vegan">Vegan</button>
+                        </div>
+                    </div>
+
+                    <div class="calc-section">
+                        <h3><i class="fa-solid fa-trash text-gray"></i> Waste (Bags/week)</h3>
+                        <div class="slider-group">
+                            <span id="val-waste">3</span>
+                            <input type="range" id="slider-waste" min="0" max="10" value="3" class="slider">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ACTION PLAN VIEW -->
+            <section id="actions" class="view">
+                <div class="actions-container glass-panel">
+                    <h2>Your Personalized Reduction Plan</h2>
+                    <p class="subtext">Commit to these actions to lower your footprint and earn Eco-Points.</p>
+                    <div class="action-list" id="actionList">
+                        <!-- Rendered by JS -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- AI ADVISOR VIEW -->
+            <section id="ai-advisor" class="view">
+                <div class="ai-container glass-panel">
+                    <div class="ai-header">
+                        <h2><i class="fa-solid fa-robot text-cyan"></i> Gemini Eco-Advisor</h2>
+                        <span class="status-badge" id="ai-status">Simulation Mode</span>
+                    </div>
+                    <div class="chat-window" id="chatWindow">
+                        <div class="message ai">
+                            <p>Hello! I am your AI Eco-Advisor. I've analyzed your current footprint profile. How can I help you reduce your emissions today?</p>
+                        </div>
+                    </div>
+                    <div class="chat-input-area">
+                        <input type="text" id="chatInput" placeholder="Ask for tips, meal plans, or transit alternatives...">
+                        <button id="sendBtn" class="btn-primary"><i class="fa-solid fa-paper-plane"></i></button>
+                    </div>
+                    <div class="quick-prompts">
+                        <button class="prompt-btn">Analyze my profile</button>
+                        <button class="prompt-btn">Suggest 3 easy actions</button>
+                        <button class="prompt-btn">Explain Carbon Offsets</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content glass-panel">
+            <span class="close-btn">&times;</span>
+            <h2>Settings</h2>
+            <div class="form-group">
+                <label for="geminiApiKey">Gemini API Key (Optional)</label>
+                <input type="password" id="geminiApiKey" placeholder="Enter API Key to enable Live AI">
+                <p class="help-text">Your key is stored locally in your browser and never sent anywhere except Google's API.</p>
+            </div>
+            <button id="saveSettingsBtn" class="btn-primary">Save Changes</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
