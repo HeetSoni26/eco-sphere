@@ -96,3 +96,9 @@ eco-sphere/
 ---
 
 *Built with ❤️ using Google Antigravity IDE for the Hack2Skill Prompt Wars Hackathon.*
+
+---
+
+## 🏆 GitHub Badges
+
+This project is used to earn GitHub achievement badges.
