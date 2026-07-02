@@ -102,3 +102,7 @@ eco-sphere/
 ## 🏆 GitHub Badges
 
 This project is used to earn GitHub achievement badges.
+
+### Badges Earned
+- Quickdraw: Closed an issue within 5 minutes
+- Pull Shark: Opened and merged pull requests
