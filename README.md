@@ -107,3 +107,4 @@ This project is used to earn GitHub achievement badges.
 - Quickdraw: Closed an issue within 5 minutes
 - Pull Shark: Opened and merged pull requests
 - Pair Extraordinaire: Coauthored commits on merged PR
+- YOLO: Merged a pull request without review
